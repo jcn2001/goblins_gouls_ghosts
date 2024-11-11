@@ -139,3 +139,84 @@ nb_submission_ggg <- nb_predictions_ggg %>%
   rename(type=.pred_class)
 
 vroom_write(x=nb_submission_ggg, file ="./nb_Preds_ggg.csv", delim=",")
+
+## Hw neural network
+install.packages("remotes")
+remotes::install_github("rstudio/tensorflow")
+reticulate::install_python()
+
+## recipe
+nn_recipe <- recipe(type~., data = ghouls_train) %>%
+  update_role(id, new_role="id") %>%
+  step_mutate(color = factor(color)) %>%
+  step_dummy(color) %>%
+  step_range(all_numeric_predictors(),min=0,max=1)
+
+nn_model <- mlp(hidden_units = tune(),
+                epochs = 50
+                ) %>%
+  set_engine("keras") %>%
+  set_mode("classification")
+
+nn_tuneGrid <- grid_regular(hidden_units(range=c(1, 15)),
+                            levels = 5)
+
+tuned_nn <- nn_wf %>%
+  tune_grid(nn_tuneGrid)
+
+tuned_nn %>% collect_metrics() %>%
+  filter(.metric=="accuracy") %>%
+  ggplot(aes(x=hidden_units, y=mean)) + geom_line()
+
+
+## fit a bart model
+library(bonsai)
+library(lightgbm)
+# assign the model
+boost_model <- boost_tree(tree_depth=tune(),
+                          trees=tune(),
+                          learn_rate=tune()) %>%
+  set_engine("lightgbm") %>%
+  set_mode("classification")
+
+# set up the workflow
+boost_wf <- workflow() %>%
+  add_recipe(nb_recipe_ggg) %>%
+  add_model(boost_model)
+
+# tune smoothness and laplace
+# tuning grid
+boost_tuning_grid <- grid_regular(tree_depth(),
+                                   trees(),
+                                  learn_rate(),
+                                   levels = 5)
+#folds
+boost_folds <- vfold_cv(ghouls_train, v = 10, repeats= 1)
+
+# cross-validation
+boost_CV_results <- boost_wf %>%
+  tune_grid(resamples=boost_folds,
+            grid=boost_tuning_grid,
+            metrics=metric_set(roc_auc, accuracy))
+
+# pick the best tuning parameter
+best_boost_tune <- boost_CV_results %>%
+  select_best(metric = "accuracy")
+
+# # Finalize the workflow and fit it
+final_boost_wf <- boost_wf %>%
+  finalize_workflow(best_boost_tune) %>%
+  fit(ghouls_train)
+
+#predictions
+boost_predictions <- predict(final_boost_wf,
+                              new_data=ghouls_test,
+                              type="class")
+
+# make the file to submit
+boost_submission <- boost_predictions %>%
+  bind_cols(.,ghouls_test) %>%
+  select(id, .pred_class) %>%
+  rename(type=.pred_class)
+
+vroom_write(x=boost_submission, file ="./boost_Preds_ggg.csv", delim=",")
