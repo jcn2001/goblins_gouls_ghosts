@@ -3,9 +3,9 @@ library(tidymodels)
 library(vroom)
 library(ggplot2)
 library(embed)
-ghouls_train <- vroom("C:/Users/Josh/Documents/stat348/ghouls-goblins-and-ghosts-boo/train.csv")
+ghouls_train <- vroom("C:/Users/Josh/Documents/stat348/goblins_gouls_ghosts/train.csv")
 ghouls_train_missing <- vroom("C:/Users/Josh/Documents/stat348/ghouls-goblins-and-ghosts-boo/trainWithMissingValues.csv")
-ghouls_test <- vroom("C:/Users/Josh/Documents/stat348/ghouls-goblins-and-ghosts-boo/test.csv")
+ghouls_test <- vroom("C:/Users/Josh/Documents/stat348/goblins_gouls_ghosts/test.csv")
 
 ghouls_train_missing <- ghouls_train_missing %>%
   mutate(color = factor(color)) %>%
@@ -143,7 +143,8 @@ vroom_write(x=nb_submission_ggg, file ="./nb_Preds_ggg.csv", delim=",")
 ## Hw neural network
 install.packages("remotes")
 remotes::install_github("rstudio/tensorflow")
-reticulate::install_python()
+## reticulate::install_python()
+keras::install_keras()
 
 ## recipe
 nn_recipe <- recipe(type~., data = ghouls_train) %>%
@@ -152,21 +153,61 @@ nn_recipe <- recipe(type~., data = ghouls_train) %>%
   step_dummy(color) %>%
   step_range(all_numeric_predictors(),min=0,max=1)
 
+## model
 nn_model <- mlp(hidden_units = tune(),
                 epochs = 50
                 ) %>%
   set_engine("keras") %>%
   set_mode("classification")
 
+## tuning grid
 nn_tuneGrid <- grid_regular(hidden_units(range=c(1, 15)),
                             levels = 5)
 
-tuned_nn <- nn_wf %>%
-  tune_grid(nn_tuneGrid)
+## folds
+nn_folds <- vfold_cv(ghouls_train, v = 10, repeats= 1)
+
+tuned_nn <- tune_grid(nn_model,
+                      nn_recipe,
+                      nn_folds,
+                      control = control_grid(save_workflow= TRUE),
+                      grid=nn_tuneGrid)
 
 tuned_nn %>% collect_metrics() %>%
   filter(.metric=="accuracy") %>%
   ggplot(aes(x=hidden_units, y=mean)) + geom_line()
+
+# workflow 
+nn_wf <- workflow() %>%
+  add_recipe(nn_recipe) %>%
+  add_model(nn_model)
+# cross-validation
+nn_CV_results <- nn_wf %>%
+  tune_grid(resamples=nn_folds,
+            grid=nn_tuneGrid,
+            metrics=metric_set(accuracy))
+
+## pick the best metric
+best_nn_tune <- nn_CV_results %>%
+  select_best(metric = "accuracy")
+
+## finalize the workflow
+final_nn_wf <- nn_wf %>%
+  finalize_workflow(best_nn_tune) %>%
+  fit(data = ghouls_train)
+
+# predictions
+nn_predictions <- predict(final_nn_wf,
+                              new_data=ghouls_test,
+                              type="class")
+
+# make the file to submit
+nn_submission <- nn_predictions %>%
+  bind_cols(.,ghouls_test) %>%
+  select(id, .pred_class) %>%
+  rename(type=.pred_class)
+
+vroom_write(x=nn_submission, file ="./nn_Preds.csv", delim=",")
 
 
 ## fit a bart model
