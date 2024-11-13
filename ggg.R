@@ -29,6 +29,10 @@ rmse_vec(ghouls_train[is.na(ghouls_train_missing)],
 
 ## fit a model
 ## HW 24 multinomial KNN model
+ghouls_train <- ghouls_train %>%
+  mutate(color = factor(color)) %>%
+  mutate(type = factor(type))
+
 library(kknn)
 
 # create the recipe, making sure to normalize for when we calculate distances
@@ -87,13 +91,15 @@ vroom_write(x=knn_submission_ggg, file ="./KNN_Preds_ggg.csv", delim=",")
 
 
 ## Naive bayes Classifier
-install.packages("discrim")
+library(discrim)
 install.packages("naivebayes")
+library(themis)
 
 # create the recipe
 nb_recipe_ggg <- recipe(type~.,data= ghouls_train) %>%
   step_mutate_at(all_nominal_predictors(), fn = factor) %>%
-  step_lencode_glm(all_nominal_predictors(), outcome = vars(type))
+  step_lencode_glm(all_nominal_predictors() , outcome = vars(type)) %>%
+  step_smote(all_outcomes(), neighbors=4)
 
 # nb model 
 nb_model_ggg <- naive_Bayes(Laplace=tune(), smoothness=tune()) %>%
@@ -108,7 +114,7 @@ nb_wf_ggg <- workflow() %>%
 # tuning grid
 nb_tuning_grid_ggg <- grid_regular(Laplace(),
                                smoothness(),
-                               levels = 5)
+                               levels = 10)
 #folds
 nb_folds_ggg <- vfold_cv(ghouls_train, v = 10, repeats= 1)
 
@@ -120,9 +126,9 @@ nb_CV_results_ggg <- nb_wf_ggg %>%
 
 # pick the best tuning parameter
 best_nb_tune_ggg <- nb_CV_results_ggg %>%
-  select_best(metric = "roc_auc")
+  select_best(metric = "accuracy")
 
-# # Finalize the workflow and fit it
+# Finalize the workflow and fit it
 final_nb_wf_ggg <- nb_wf_ggg %>%
   finalize_workflow(best_nb_tune_ggg) %>%
   fit(ghouls_train)
@@ -181,6 +187,7 @@ tuned_nn %>% collect_metrics() %>%
 nn_wf <- workflow() %>%
   add_recipe(nn_recipe) %>%
   add_model(nn_model)
+
 # cross-validation
 nn_CV_results <- nn_wf %>%
   tune_grid(resamples=nn_folds,
